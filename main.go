@@ -40,7 +40,7 @@ func pad32(b []byte) []byte {
 }
 
 func privToAddr(priv []byte) []byte {
-	key, _ := secp256k1.PrivKeyFromBytes(priv)
+	key := secp256k1.PrivKeyFromBytes(priv)
 	pub := key.PubKey().SerializeUncompressed()
 	return keccak256(pub[1:])[12:]
 }
@@ -129,7 +129,7 @@ func signAndSend(privBytes, minerAddr []byte, nonce uint64) error {
 		rlpBytes(bigBytes(cid)), rlpBytes([]byte{}), rlpBytes([]byte{}),
 	))
 
-	privKey, _ := secp256k1.PrivKeyFromBytes(privBytes)
+	privKey := secp256k1.PrivKeyFromBytes(privBytes)
 	sig := ecdsa.SignCompact(privKey, sigHash, false)
 	v := big.NewInt(int64(sig[0]-27) + 35 + 2*chainID)
 
