@@ -22,10 +22,9 @@ import (
 )
 
 var rpcURLs = []string{
+	"https://rpc.flashbots.net/fast",
 	"https://eth.llamarpc.com",
-	"https://cloudflare-eth.com",
 	"https://ethereum.publicnode.com",
-	"https://1rpc.io/eth",
 }
 
 var rpcIndex int
