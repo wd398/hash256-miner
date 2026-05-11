@@ -58,7 +58,6 @@ type rpcResp struct {
 	Error  *struct{ Message string `json:"message"` } `json:"error"`
 }
 
-// rpcCallOnce 用指定 RPC 调一次
 func rpcCallOnce(url, method string, params []interface{}) (string, error) {
 	body, _ := json.Marshal(map[string]interface{}{"jsonrpc":"2.0","method":method,"params":params,"id":1})
 	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
@@ -72,20 +71,15 @@ func rpcCallOnce(url, method string, params []interface{}) (string, error) {
 	return r.Result, nil
 }
 
-// rpcCall 轮询所有节点直到成功，每轮打印一次状态
 func rpcCall(method string, params []interface{}) (string, error) {
 	n := len(rpcURLs)
-	attempt := 0
-	for {
+	for attempt := 0; ; attempt++ {
 		url := rpcURLs[rpcIndex%n]
 		rpcIndex++
 		res, err := rpcCallOnce(url, method, params)
-		if err == nil {
-			return res, nil
-		}
-		attempt++
-		if attempt%n == 0 {
-			fmt.Printf("[~] RPC重试中(%s)... %s\n", method, err)
+		if err == nil { return res, nil }
+		if attempt > 0 && attempt%n == 0 {
+			fmt.Printf("[~] RPC重试(%s): %s\n", method, err)
 			time.Sleep(2 * time.Second)
 		}
 	}
@@ -96,14 +90,22 @@ func callUint256(sig string) (*big.Int, error) {
 	res, err := rpcCall("eth_call", []interface{}{map[string]string{"to":"0x"+contractHex,"data":sel},"latest"})
 	if err != nil { return nil, err }
 	res = strings.TrimPrefix(res, "0x")
-	if len(res) < 64 { return nil, fmt.Errorf("short") }
+	if len(res) < 64 { return nil, fmt.Errorf("empty response") }
 	n, _ := new(big.Int).SetString(res[:64], 16)
 	return n, nil
 }
 
-func computeChallenge(miner []byte, epoch *big.Int) []byte {
-	ct, _ := hex.DecodeString(contractHex)
-	return keccak256(pad32(big.NewInt(chainID).Bytes()), pad32(ct), pad32(miner), pad32(epoch.Bytes()))
+// getChallenge 调用合约 getChallenge(address) 直接返回 bytes32
+func getChallenge(minerAddr []byte) ([]byte, error) {
+	// selector of getChallenge(address)
+	sel := keccak256([]byte("getChallenge(address)"))[:4]
+	data := "0x" + hex.EncodeToString(sel) + hex.EncodeToString(pad32(minerAddr))
+	res, err := rpcCall("eth_call", []interface{}{map[string]string{"to":"0x"+contractHex,"data":data},"latest"})
+	if err != nil { return nil, err }
+	res = strings.TrimPrefix(res, "0x")
+	if len(res) < 64 { return nil, fmt.Errorf("empty challenge") }
+	b, _ := hex.DecodeString(res[:64])
+	return b, nil
 }
 
 func mineRange(challenge []byte, diff *big.Int, start, step uint64, found *int32, result *uint64, wg *sync.WaitGroup) {
@@ -197,11 +199,12 @@ func main() {
 	for {
 		diff, err := callUint256("currentDifficulty()")
 		if err != nil { fmt.Println("[!] difficulty:", err); time.Sleep(3*time.Second); continue }
-		epoch, err := callUint256("currentEpoch()")
-		if err != nil { fmt.Println("[!] epoch:", err); time.Sleep(3*time.Second); continue }
-		fmt.Printf("[*] epoch=%s  diff=0x%x\n", epoch, diff)
 
-		challenge := computeChallenge(minerAddr, epoch)
+		challenge, err := getChallenge(minerAddr)
+		if err != nil { fmt.Println("[!] challenge:", err); time.Sleep(3*time.Second); continue }
+
+		fmt.Printf("[*] diff=0x%x  challenge=%x\n", diff, challenge)
+
 		threads := runtime.NumCPU()
 		var foundFlag int32
 		var resultNonce uint64
