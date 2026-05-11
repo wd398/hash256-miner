@@ -108,6 +108,8 @@ func getChallenge(minerAddr []byte) ([]byte, error) {
 	return b, nil
 }
 
+var hashCount int64
+
 func mineRange(challenge []byte, diff *big.Int, start, step uint64, found *int32, result *uint64, wg *sync.WaitGroup) {
 	defer wg.Done()
 	nonce := start
@@ -120,6 +122,7 @@ func mineRange(challenge []byte, diff *big.Int, start, step uint64, found *int32
 			return
 		}
 		nonce += step
+		atomic.AddInt64(&hashCount, 1)
 	}
 }
 
@@ -213,12 +216,31 @@ func main() {
 		rand.Read(startBuf[:])
 		start := binary.BigEndian.Uint64(startBuf[:])
 
+		atomic.StoreInt64(&hashCount, 0)
+		stopPrint := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			var last int64
+			for {
+				select {
+				case <-ticker.C:
+					cur := atomic.LoadInt64(&hashCount)
+					fmt.Printf("\r[~] 算力: %d H/s    ", (cur-last)*int64(threads))
+					last = cur
+				case <-stopPrint:
+					return
+				}
+			}
+		}()
 		t0 := time.Now()
 		for i := 0; i < threads; i++ {
 			wg.Add(1)
 			go mineRange(challenge, diff, start+uint64(i), uint64(threads), &foundFlag, &resultNonce, &wg)
 		}
 		wg.Wait()
+		close(stopPrint)
+		fmt.Println()
 		fmt.Printf("[+] nonce=%d  耗时=%.1fs  提交中...\n", resultNonce, time.Since(t0).Seconds())
 		if err := signAndSend(privBytes, minerAddr, resultNonce); err != nil {
 			fmt.Println("[!] 提交失败:", err)
