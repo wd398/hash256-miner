@@ -1,0 +1,21 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - run: go mod tidy
+      - run: GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o hash256_miner.exe .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hash256_miner_windows
+          path: hash256_miner.exe
