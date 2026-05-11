@@ -21,8 +21,22 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
+var rpcURLs = []string{
+	"https://rpc.ankr.com/eth",
+	"https://cloudflare-eth.com",
+	"https://eth.llamarpc.com",
+	"https://ethereum.publicnode.com",
+}
+
+var rpcIndex int
+
+func nextRPC() string {
+	u := rpcURLs[rpcIndex%len(rpcURLs)]
+	rpcIndex++
+	return u
+}
+
 const (
-	rpcURL      = "https://eth.llamarpc.com"
 	contractHex = "AC7b5d06fa1e77D08aea40d46cB7C5923A87A0cc"
 	chainID     = 1
 )
@@ -52,11 +66,14 @@ type rpcResp struct {
 
 func rpcCall(method string, params []interface{}) (string, error) {
 	body, _ := json.Marshal(map[string]interface{}{"jsonrpc":"2.0","method":method,"params":params,"id":1})
-	resp, err := http.Post(rpcURL, "application/json", bytes.NewReader(body))
+	url := nextRPC()
+	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil { return "", err }
 	defer resp.Body.Close()
 	var r rpcResp
-	json.NewDecoder(resp.Body).Decode(&r)
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return "", fmt.Errorf("json decode: %w", err)
+	}
 	if r.Error != nil { return "", fmt.Errorf("%s", r.Error.Message) }
 	return r.Result, nil
 }
@@ -66,7 +83,7 @@ func callUint256(sig string) (*big.Int, error) {
 	res, err := rpcCall("eth_call", []interface{}{map[string]string{"to":"0x"+contractHex,"data":sel},"latest"})
 	if err != nil { return nil, err }
 	res = strings.TrimPrefix(res, "0x")
-	if len(res) < 64 { return nil, fmt.Errorf("short: %s", res) }
+	if len(res) < 64 { return nil, fmt.Errorf("挖矿未开放（合约未初始化）") }
 	n, _ := new(big.Int).SetString(res[:64], 16)
 	return n, nil
 }
@@ -164,11 +181,25 @@ func main() {
 	fmt.Printf("[*] 矿工地址: 0x%s\n", hex.EncodeToString(minerAddr))
 	fmt.Printf("[*] 线程数: %d\n", runtime.NumCPU())
 
+	waitPrinted := false
 	for {
 		diff, err := callUint256("currentDifficulty()")
-		if err != nil { fmt.Println("[!] difficulty:", err); time.Sleep(10*time.Second); continue }
+		if err != nil {
+			if strings.Contains(err.Error(), "未开放") || strings.Contains(err.Error(), "reverted") {
+				if !waitPrinted {
+					fmt.Println("[~] 挖矿未开放，等待中（每30秒检查一次）...")
+					waitPrinted = true
+				}
+				time.Sleep(30 * time.Second)
+				continue
+			}
+			fmt.Println("[!] RPC错误:", err, "，重试中...")
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		waitPrinted = false
 		epoch, err := callUint256("currentEpoch()")
-		if err != nil { fmt.Println("[!] epoch:", err); time.Sleep(10*time.Second); continue }
+		if err != nil { fmt.Println("[!] epoch:", err); time.Sleep(5*time.Second); continue }
 		fmt.Printf("[*] epoch=%s  diff=0x%x\n", epoch, diff)
 
 		challenge := computeChallenge(minerAddr, epoch)
