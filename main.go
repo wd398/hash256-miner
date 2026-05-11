@@ -158,7 +158,7 @@ func signAndSend(privBytes, minerAddr []byte, nonce uint64) error {
 	txNonce, _ := new(big.Int).SetString(strings.TrimPrefix(txNonceHex,"0x"), 16)
 	gasPriceHex, _ := rpcCall("eth_gasPrice", []interface{}{})
 	gasPrice, _ := new(big.Int).SetString(strings.TrimPrefix(gasPriceHex,"0x"), 16)
-	gasPrice.Mul(gasPrice, big.NewInt(120)).Div(gasPrice, big.NewInt(100)) // +20% gas
+	gasPrice.Mul(gasPrice, big.NewInt(150)).Div(gasPrice, big.NewInt(100)) // +50% gas
 
 	cid := big.NewInt(chainID)
 	sigHash := keccak256(rlpList(
