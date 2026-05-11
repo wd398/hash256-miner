@@ -30,12 +30,6 @@ var rpcURLs = []string{
 
 var rpcIndex int
 
-func nextRPC() string {
-	u := rpcURLs[rpcIndex%len(rpcURLs)]
-	rpcIndex++
-	return u
-}
-
 const (
 	contractHex = "AC7b5d06fa1e77D08aea40d46cB7C5923A87A0cc"
 	chainID     = 1
@@ -64,18 +58,40 @@ type rpcResp struct {
 	Error  *struct{ Message string `json:"message"` } `json:"error"`
 }
 
-func rpcCall(method string, params []interface{}) (string, error) {
+// rpcCallOnce 用指定 RPC 调一次
+func rpcCallOnce(url, method string, params []interface{}) (string, error) {
 	body, _ := json.Marshal(map[string]interface{}{"jsonrpc":"2.0","method":method,"params":params,"id":1})
-	url := nextRPC()
 	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil { return "", err }
 	defer resp.Body.Close()
 	var r rpcResp
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return "", fmt.Errorf("json decode: %w", err)
+		return "", fmt.Errorf("json: %w", err)
 	}
 	if r.Error != nil { return "", fmt.Errorf("%s", r.Error.Message) }
 	return r.Result, nil
+}
+
+// rpcCall 轮询所有节点直到成功
+func rpcCall(method string, params []interface{}) (string, error) {
+	n := len(rpcURLs)
+	for i := 0; i < n*3; i++ {
+		url := rpcURLs[rpcIndex%n]
+		rpcIndex++
+		res, err := rpcCallOnce(url, method, params)
+		if err == nil {
+			return res, nil
+		}
+	}
+	// 全部失败，等1秒再试一轮
+	time.Sleep(time.Second)
+	for {
+		url := rpcURLs[rpcIndex%n]
+		rpcIndex++
+		res, err := rpcCallOnce(url, method, params)
+		if err == nil { return res, nil }
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 func callUint256(sig string) (*big.Int, error) {
@@ -83,7 +99,7 @@ func callUint256(sig string) (*big.Int, error) {
 	res, err := rpcCall("eth_call", []interface{}{map[string]string{"to":"0x"+contractHex,"data":sel},"latest"})
 	if err != nil { return nil, err }
 	res = strings.TrimPrefix(res, "0x")
-	if len(res) < 64 { return nil, fmt.Errorf("挖矿未开放（合约未初始化）") }
+	if len(res) < 64 { return nil, fmt.Errorf("short") }
 	n, _ := new(big.Int).SetString(res[:64], 16)
 	return n, nil
 }
@@ -181,25 +197,11 @@ func main() {
 	fmt.Printf("[*] 矿工地址: 0x%s\n", hex.EncodeToString(minerAddr))
 	fmt.Printf("[*] 线程数: %d\n", runtime.NumCPU())
 
-	waitPrinted := false
 	for {
 		diff, err := callUint256("currentDifficulty()")
-		if err != nil {
-			if strings.Contains(err.Error(), "未开放") || strings.Contains(err.Error(), "reverted") {
-				if !waitPrinted {
-					fmt.Println("[~] 挖矿未开放，等待中（每30秒检查一次）...")
-					waitPrinted = true
-				}
-				time.Sleep(30 * time.Second)
-				continue
-			}
-			fmt.Println("[!] RPC错误:", err, "，重试中...")
-			time.Sleep(5 * time.Second)
-			continue
-		}
-		waitPrinted = false
+		if err != nil { fmt.Println("[!] difficulty:", err); time.Sleep(3*time.Second); continue }
 		epoch, err := callUint256("currentEpoch()")
-		if err != nil { fmt.Println("[!] epoch:", err); time.Sleep(5*time.Second); continue }
+		if err != nil { fmt.Println("[!] epoch:", err); time.Sleep(3*time.Second); continue }
 		fmt.Printf("[*] epoch=%s  diff=0x%x\n", epoch, diff)
 
 		challenge := computeChallenge(minerAddr, epoch)
