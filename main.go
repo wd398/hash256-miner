@@ -72,25 +72,22 @@ func rpcCallOnce(url, method string, params []interface{}) (string, error) {
 	return r.Result, nil
 }
 
-// rpcCall 轮询所有节点直到成功
+// rpcCall 轮询所有节点直到成功，每轮打印一次状态
 func rpcCall(method string, params []interface{}) (string, error) {
 	n := len(rpcURLs)
-	for i := 0; i < n*3; i++ {
+	attempt := 0
+	for {
 		url := rpcURLs[rpcIndex%n]
 		rpcIndex++
 		res, err := rpcCallOnce(url, method, params)
 		if err == nil {
 			return res, nil
 		}
-	}
-	// 全部失败，等1秒再试一轮
-	time.Sleep(time.Second)
-	for {
-		url := rpcURLs[rpcIndex%n]
-		rpcIndex++
-		res, err := rpcCallOnce(url, method, params)
-		if err == nil { return res, nil }
-		time.Sleep(500 * time.Millisecond)
+		attempt++
+		if attempt%n == 0 {
+			fmt.Printf("[~] RPC重试中(%s)... %s\n", method, err)
+			time.Sleep(2 * time.Second)
+		}
 	}
 }
 
