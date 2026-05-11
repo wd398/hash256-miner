@@ -64,9 +64,7 @@ func rpcCallOnce(url, method string, params []interface{}) (string, error) {
 	if err != nil { return "", err }
 	defer resp.Body.Close()
 	var r rpcResp
-	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return "", fmt.Errorf("json: %w", err)
-	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil { return "", fmt.Errorf("json: %w", err) }
 	if r.Error != nil { return "", fmt.Errorf("%s", r.Error.Message) }
 	return r.Result, nil
 }
@@ -79,7 +77,7 @@ func rpcCall(method string, params []interface{}) (string, error) {
 		res, err := rpcCallOnce(url, method, params)
 		if err == nil { return res, nil }
 		if attempt > 0 && attempt%n == 0 {
-			fmt.Printf("[~] RPC重试(%s): %s\n", method, err)
+			fmt.Printf("\n[~] RPC重试(%s): %s\n", method, err)
 			time.Sleep(2 * time.Second)
 		}
 	}
@@ -95,9 +93,7 @@ func callUint256(sig string) (*big.Int, error) {
 	return n, nil
 }
 
-// getChallenge 调用合约 getChallenge(address) 直接返回 bytes32
 func getChallenge(minerAddr []byte) ([]byte, error) {
-	// selector of getChallenge(address)
 	sel := keccak256([]byte("getChallenge(address)"))[:4]
 	data := "0x" + hex.EncodeToString(sel) + hex.EncodeToString(pad32(minerAddr))
 	res, err := rpcCall("eth_call", []interface{}{map[string]string{"to":"0x"+contractHex,"data":data},"latest"})
@@ -114,15 +110,21 @@ func mineRange(challenge []byte, diff *big.Int, start, step uint64, found *int32
 	defer wg.Done()
 	nonce := start
 	nb := make([]byte, 32)
+	local := int64(0)
 	for atomic.LoadInt32(found) == 0 {
 		binary.BigEndian.PutUint64(nb[24:], nonce)
 		if new(big.Int).SetBytes(keccak256(challenge, nb)).Cmp(diff) < 0 {
 			atomic.StoreInt32(found, 1)
 			atomic.StoreUint64(result, nonce)
+			atomic.AddInt64(&hashCount, local)
 			return
 		}
 		nonce += step
-		atomic.AddInt64(&hashCount, 1)
+		local++
+		if local%10000 == 0 {
+			atomic.AddInt64(&hashCount, 10000)
+			local = 0
+		}
 	}
 }
 
@@ -206,7 +208,7 @@ func main() {
 		challenge, err := getChallenge(minerAddr)
 		if err != nil { fmt.Println("[!] challenge:", err); time.Sleep(3*time.Second); continue }
 
-		fmt.Printf("[*] diff=0x%x  challenge=%x\n", diff, challenge)
+		fmt.Printf("[*] diff=0x%x\n", diff)
 
 		threads := runtime.NumCPU()
 		var foundFlag int32
@@ -226,13 +228,15 @@ func main() {
 				select {
 				case <-ticker.C:
 					cur := atomic.LoadInt64(&hashCount)
-					fmt.Printf("\r[~] 算力: %d H/s    ", (cur-last)*int64(threads))
+					rate := cur - last
 					last = cur
+					fmt.Printf("\r[~] 算力: %d KH/s    ", rate/1000)
 				case <-stopPrint:
 					return
 				}
 			}
 		}()
+
 		t0 := time.Now()
 		for i := 0; i < threads; i++ {
 			wg.Add(1)
@@ -240,8 +244,8 @@ func main() {
 		}
 		wg.Wait()
 		close(stopPrint)
-		fmt.Println()
-		fmt.Printf("[+] nonce=%d  耗时=%.1fs  提交中...\n", resultNonce, time.Since(t0).Seconds())
+
+		fmt.Printf("\n[+] nonce=%d  耗时=%.1fs  提交中...\n", resultNonce, time.Since(t0).Seconds())
 		if err := signAndSend(privBytes, minerAddr, resultNonce); err != nil {
 			fmt.Println("[!] 提交失败:", err)
 		}
